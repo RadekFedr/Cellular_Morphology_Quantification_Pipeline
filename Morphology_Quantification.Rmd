@@ -1,0 +1,468 @@
+---
+title: "Morphology Quantification"
+output: 
+  pdf_document: 
+    fig_caption: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+**Date: `r strftime(Sys.time(),"%d-%m-%Y")`**  
+
+```{r Package_Installation_Loading_Libraries, include=FALSE}
+# Packages names
+packages <- c("EBImage", "ggplot2", "dplyr", "tidyverse", "tinytex", "here", "knitr", "stats", "ggprism", "gridExtra", "Rtsne", "umap", "xlsx", "pheatmap")
+
+# Updates packages
+options(repos=list(CRAN="http://cran.rstudio.com/"))
+oldpacks <- old.packages(oldPkgs=packages, repos="http://cran.us.r-project.org")
+namesoldpacks <- oldpacks[,1]
+testupdpacks <- is.null(old.packages(oldPkgs=packages))
+if (testupdpacks==FALSE) {
+update.packages(oldPkgs=namesoldpacks)
+}
+
+# Install packages not yet installed
+ installed_packages <- packages %in% rownames(installed.packages())
+ if (any(installed_packages == FALSE)) {
+   install.packages(packages[!installed_packages])
+ }
+
+ # Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+```
+  
+```{r Global_Setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, error=TRUE, warning=FALSE) #global setup - Rcode not shown, error messages shown
+here::i_am("Morphology_Quantification.Rmd") #setup directory path to project folder
+set.seed(5) #sets seed for reproducibility
+```
+
+## Introduction
+
+This report provides results of R script developed for purpose of **quantitative evaluation of cellular morphology**.  
+
+Nucleus (Hoechst 33342), cytosol (Calcein) and plasma membrane (Wheat germ aglutinin AF680, WGA) compartments of cells were fluorescently stained and scanned on confocal fluorescence microscope.  
+
+One-click script provides multiple outputs (see section *output files*) and compares different morphology phenotypes of **one repetition** experiment. It was designed for comparison up to **20 different samples** (cell lines, conditions, clones) - in this analysis named **Groups**.  
+
+**Morphology parameters are quantified for object of nucleus and cell**. Another parameters: Intensity of Calcein in cell provides information about **viability** (metabolic activity) of the cell; Intensity of Hoechst provides information about **cell cycle phase** of the cell.   
+  
+
+## Material and methods
+
+### Sample staining and processing
+
+1. Seed the cells ~ 6000/cm^2^ into IBIDI µ-Slide 8 Well chambers and cultivate for 2 days, each well fill with 200 µl of complete media  
+
+2. Stain cells by adding Hoechst33342 1:2000 (F4/1), 1 mM Calcein 1:100 (F1/1), Wheat germ aglutinin AF680 (1C/2/1a) 1:500 into well containing complete medium. Incubate 15 min/37°C.  
+
+3. Wash cells gently with 300 µl RT PBS  
+
+4. Fix cells for 10-15 min/RT with 1.5% PFA  
+
+5. Wash cells gently and fill wells with 300 µl RT PBS  
+
+6. Scan images on confocal fluorescent microscope Olympus FV10i  
+
+### Input files
+
+The input of this analysis are acquired images fulfilling following conditions:  
+
+* Mandatory: 3 fields of view (FOVs) per compared sample (*Group*)
+* Mandatory: 4 channels (Hoechts, Calcein, WGA AF680, Phase contrast)
+* Microscope: Olympus FV10i
+* Objective: 10x 0.4NA
+* Zoom: 2x
+* Image format: 1024x1024 px
+* Data format: 12bit .tif
+* Image file format name (default from Olympus FV10i): “s_C001.tif” (channels 1-4 = C001-C004)
+* Recommended: open confocal aperture: 5x, averaging: quality 4x
+
+The input images are located in:  
+**`r here("Images")`**
+
+### Output files
+
+This *Morphology_Quantification* PDF file is meant to be a summary of one repetition experiment results.  
+
+Several other outputs are generated and you can find them in:   
+**`r here("Exported")`**  
+
+Outputs:  
+
+* Re-scaled colour-coded images, Overlay of fluorescent images, Image of segmentation (in this report)
+* Morphology_Statistics_Per_Group.xlsx - excel file containing group statistics (means, SDs)
+* Parameter plots - violin/boxplot plots of computed parameters 
+* Heatmaps - heat maps with euclidian clustering of groups
+* Dimension reduction plots - PCA, t-SNE and UMAP
+* TableOfCells.csv - text file containing all cells/nuclei quantification together with coordinates of dimension reduction methods
+
+Note: The file *TableOfCells.csv* can be used as source file for further gating and analysis in FlowJo and other software tools.
+  
+
+## RESULTS
+
+### Input images and groups
+```{r Images_path_reading, include=FALSE}
+##Creates new variable with path to folder with images
+LinkImages <- paste(here("Images"), sep="")
+
+##Reads image names of separate channels
+all.images <- data.frame(ch.1=c(dir(LinkImages, pattern=".*C001.*.tif")), ch.2=c(dir(LinkImages, pattern=".*C002.*.tif")), ch.3=c(dir(LinkImages, pattern=".*C003.*.tif")), ch.4=c(dir(LinkImages, pattern=".*C004.*.tif")))
+
+##Reorders images in table according names
+all.images$Order <- substr(all.images$ch.1,9,10)
+all.images$Order <- gsub(pattern="if", replace=c(paste0("01")), all.images$Order)
+all.images$Order <- ifelse(grepl(pattern=".*).*", all.images$Order), paste0(substr(all.images$Order,1,1)), paste0(substr(all.images$Order,1,2)))
+all.images$Order <- as.numeric(all.images$Order)
+all.images <- all.images %>% arrange(Order)
+```
+
+It was analysed **`r nrow(all.images)`** image sets. **`r nrow(all.images)/3`** groups were compared.  
+
+
+### Images
+Following images are re-scalled images of 5^th^ percentile minimum intensity and 75^th^ percentile of max. intensity of original image. Therefore background signal was subtracted (only in phase contrast image background was not subtracted) and signal of dim images is enhanced. Colour-coding of channels: Hoechst3342 (Blue), Calcein (Green), WGA AF680 (Red), Phase contrast (Grey). 
+
+Images were then in the script processed. Median filtration for noise reduction was applied. Nuclei were segmented from re-scalled, median filtered image using adaptive tresholding. Holes in the objects were filled and binary operation of opening was applied. Objects of cells were segmented from combined images of calcein and wga. Next, binary operation of opening, followed by propagation and filling holes in objects was applied. Segmented objects of nuclei (yellow line) and cell (purple line) are shown on overlayed image of hoechst, calcein and wga.
+
+\newpage
+**Hoechst 33342**   |   **&nbsp; &nbsp; Calcein &nbsp; &nbsp; **   |   **WGA AF680**   |   **&nbsp; &nbsp; Overlay&nbsp; &nbsp; **   |   **Phase contrast**   |   **Segmentation**
+
+```{r Image_processing_segmentation, fig.width=7, fig.height=1.17}
+##Image processing
+i<-as.numeric(1)
+letterseq <- rep(LETTERS[1:3], times=max(nrow(all.images)/3)) #prepares a, b, c description of triplicates for images
+FinalOtable <- data.frame()
+for (i in 1:nrow(all.images)) {
+#Loading of images
+hoechst <- readImage(paste(here("Images"), all.images$ch.1[i] , sep="/"), type="tif")
+calcein <- readImage(paste(here("Images"), all.images$ch.2[i] , sep="/"), type="tif")
+wga <- readImage(paste(here("Images"), all.images$ch.3[i] , sep="/"), type="tif")
+phase <- readImage(paste(here("Images"), all.images$ch.4[i] , sep="/"), type="tif")
+
+#Rescaling image intensity based on 75th percentile of range
+  #range <- 0.06248569
+range1a <- quantile(range(hoechst), probs = 0.05)
+range1b <- quantile(range(hoechst), probs = 0.75)
+range2a <- quantile(range(calcein), probs = 0.05)
+range2b <- quantile(range(calcein), probs = 0.75)
+range3a <- quantile(range(wga), probs = 0.05)
+range3b <- quantile(range(wga), probs = 0.75)
+range4 <- quantile(range(phase), probs = 0.75)
+
+rhoechst <- EBImage::normalize(hoechst, separate=TRUE, ft=c(0,1), inputRange=c(range1a,range1b))
+rcalcein <- EBImage::normalize(calcein, separate=TRUE, ft=c(0,1), inputRange=c(range2a,range2b))
+rwga <- EBImage::normalize(wga, separate=TRUE, ft=c(0,1), inputRange=c(range3a,range3b))
+rphase <- EBImage::normalize(phase, separate=TRUE, ft=c(0,1), inputRange=c(0,range4))
+
+#Noise reduction
+erhoechst <- medianFilter(rhoechst, 3)
+ercalcein <- medianFilter(rcalcein, 2)
+erwga <- medianFilter(rwga, 2)
+#display(erhoechst, method="raster", all=TRUE)
+#display(erwga, method="raster", all=TRUE)
+#display(ercalcein, method="raster", all=TRUE)
+
+#Image visualization
+imerged <- rgbImage(blue=rhoechst, green=rcalcein, red=rwga)
+  #display(imerged, method="raster", all=TRUE)
+
+#Nuclei segmentation
+nmask <- thresh(erhoechst, w=10, h=10, offset=0.001)
+nmask <- fillHull(nmask)
+nmask <- opening(nmask, makeBrush(9, shape='disc'))
+nmask <- bwlabel(nmask)
+  #display(nmask, method="raster", all=TRUE)
+
+#Whole cell segmentation
+icomb <- ercalcein + erwga
+  #display(icomb, method="raster", all=TRUE)
+  #hist(icomb)
+ctmask <- opening(icomb>0.09, makeBrush(5, shape='Gaussian'))
+cmask <- propagate(icomb, seeds=nmask, mask=ctmask)
+cmask <- fillHull(cmask)
+  #display(ctmask, method="raster", all=TRUE)
+  #display(colorLabels(cmask), all=TRUE)
+isegm <- paintObjects(cmask, imerged, col='#ff00ff')
+isegm <- paintObjects(nmask, isegm, col='#ffff00')
+  #display(isegm, all=TRUE)
+  #show(isegm)
+myimage1 <- getFrame(isegm, 1) #gets Red channel of segmented objects image
+myimage2 <- getFrame(isegm, 2) #gets Green channel of segmented objects image
+myimage3 <- getFrame(isegm, 3) #gets Blue channel of segmented objects image
+  #display(myimage3, all=TRUE)
+
+#Quantification of cell features
+ntable1 <- as.data.frame(computeFeatures.basic(nmask, ref=hoechst, xname="ONucleus_HoechstIntensity")) #intensity quantification
+ntable2 <- as.data.frame(computeFeatures.shape(nmask, xname="ONucleus_Shape")) #shape parameters
+ntable3 <- as.data.frame(computeFeatures.moment(nmask, xname="ONucleus_Momentum")) #momentum parameters e.g. eccentricity
+ntabletot <- cbind(ntable1 %>% select("b.mean"), ntable2 %>%  select("s.area", "s.perimeter", "s.radius.mean"),  ntable3 %>%  select("m.majoraxis", "m.eccentricity")) #selecting parameters
+colnames(ntabletot) <- paste("ONucleus", colnames(ntabletot), sep="_") #prefix of object Nucleus to parameter names
+  #names(ntabletot)
+
+celltable1 <- as.data.frame(computeFeatures.basic(cmask, ref=calcein, xname="OCell_CalceinIntensity"))
+celltable2 <- as.data.frame(computeFeatures.shape (cmask, xname="OCell_Shape"))
+celltable3 <- as.data.frame(computeFeatures.moment(cmask, xname="OCell_Momentum"))
+ctabletot <- cbind(celltable1 %>% select("b.mean"), celltable2 %>%  select("s.area", "s.perimeter", "s.radius.mean"),  celltable3 %>%  select("m.majoraxis", "m.eccentricity")) #selecting parameters
+colnames(ctabletot) <- paste("OCell", colnames(ctabletot), sep="_") #prefix of object Cell to parameter names
+  #names(ctabletot)
+Otable <- cbind(ntabletot, ctabletot) #creates object table
+vgroup <- c(rep(1:max(nrow(all.images)/3), each=3)) #create group names according triplicate
+Otable <- cbind(Otable, Group=vgroup[i]) #inserts triplicate group name
+FinalOtable <- rbind(FinalOtable, Otable) #adds quantified objects to final cell object table
+
+#Displays images in color, merged image, phase contrast and segmentation
+montImage5ch <- EBImage::abind(rgbImage(blue=rhoechst), rgbImage(green=rcalcein), rgbImage(red=rwga), rgbImage(blue=rhoechst,green=rcalcein, red=rwga), rgbImage(blue=rphase, green=rphase, red=rphase), isegm, along=1)
+display(montImage5ch, method="raster", all=TRUE)
+print(paste0("Group: ", vgroup[i], " image: ", letterseq[i]))
+}
+```
+  
+\newpage
+### Statistics per group
+
+Means and SDs were calculated per group for each of quantified parameter.  
+
+The table "Morphology_Statistics_Per_Group.xlsx" containing this statistics is located in:  
+`r here("Exported")`  
+```{r Statistics_computing}
+#Creates table of statistics per groups = triplicates
+  #names(FinalOtable)
+statTable <- FinalOtable %>% group_by(Group) %>% summarise(Mean_intensity_Hoechst_Nucleus=mean(ONucleus_b.mean), SD_Intensity_Hoechst_Nucleus=sd(ONucleus_b.mean), Mean_area_Nucleus=mean(ONucleus_s.area), SD_area_Nucleus=sd(ONucleus_s.area), Mean_perimeter_Nucleus=mean(ONucleus_s.perimeter), SD_perimeter_Nucleus=sd(ONucleus_s.perimeter), Mean_radius_Nucleus=mean(ONucleus_s.radius.mean), SD_radius_Nucleus=sd(ONucleus_s.radius.mean), Mean_majoraxis_Nucleus=mean(ONucleus_m.majoraxis), SD_majoraxis_Nucleus=sd(ONucleus_m.majoraxis), Mean_eccentricity_Nucleus=mean(ONucleus_m.eccentricity), SD_eccentricity_Nucleus=sd(ONucleus_m.eccentricity),
+                                                           Mean_intensity_Calcein_Cell=mean(OCell_b.mean), SD_Intensity_Calcein_Cell=sd(OCell_b.mean), Mean_area_Cell=mean(OCell_s.area), SD_area_Cell=sd(OCell_s.area), Mean_perimeter_Cell=mean(OCell_s.perimeter), SD_perimeter_Cell=sd(OCell_s.perimeter), Mean_radius_Cell=mean(OCell_s.radius.mean), SD_radius_Cell=sd(OCell_s.radius.mean), Mean_majoraxis_Cell=mean(OCell_m.majoraxis), SD_majoraxis_Cell=sd(OCell_m.majoraxis), Mean_eccentricity_Cell=mean(OCell_m.eccentricity), SD_eccentricity_Cell=sd(OCell_m.eccentricity))
+
+#Exports table of statistics per group into "Exported" folder
+write.xlsx(as.data.frame(statTable), paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","Morphology_Statistics_Per_Group.xlsx", sep=""), row.names=FALSE)
+```
+
+\newpage
+### Parameter plots
+
+Violin/Boxplots of quantified parameters of nucleus and cell objects. Groups on plots are sorted from high to low. Black dot in box represents mean of the group. Line in the box is median and edges of the box are 25^th^ and 75^th^ percentile. Grey dots represents original measured values per object.
+
+```{r Grouped_Plots_Creating, include=FALSE}
+MeansCol <- c(seq(2,25, by=2)) #column numbers of means in statTable
+RenameTab <- data.frame(Original=names(FinalOtable[1:12]), NewName=names(statTable[c(MeansCol)])) #table of original and new names for plots
+  #RenameTab
+  #SDCol <- c(seq(3,13, by=2))
+
+#Orders groups according each column means per each parameter in statTable
+j<-as.numeric(1)
+statTable2 <- list()
+for(j in 1:12) {
+    statTable2[[j]] <- statTable %>% arrange(statTable[MeansCol[j]])
+} 
+
+#Function for violin/boxplot production, black dot in box represents mean, gray dots are original data of cells
+plotProduction <- function (a) {
+    FinalOtable %>%
+    ggplot(aes(x=factor(Group, levels=c(pull(statTable2[[a]], Group))), y=FinalOtable[,a], fill=as.factor(Group), col=as.factor(Group))) +
+    geom_jitter(color="gray", size=0.2, alpha=0.6) +  
+    geom_violin(alpha=0.5) +
+    geom_boxplot(width=0.3, color="black", outlier.shape = NA, alpha=0) +
+    stat_summary(fun="mean", color="black", size=0.8, geom="point") +
+    scale_fill_prism(palette = "colors") +
+    scale_colour_prism(palette = "colors") +
+    theme_prism() +
+    theme(legend.position="none", plot.title = element_text(size=11)) +
+    ggtitle(RenameTab$NewName[a]) +
+    theme(axis.title.x=element_blank(), axis.title.y=element_blank()) +
+    coord_flip()
+}
+#Storage of separate plots into vplot list
+a <- as.matrix(c(1:12))
+vplots <- list()
+vplots <- apply(a, MARGIN=1, FUN=plotProduction)
+
+#Saves images of layout of 6 and 6 other plots that fits in 2x A4 pages
+png(file=paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","Param_plots1.png", sep = ""), width=2480, height=3508, res=200)
+
+do.call("grid.arrange", c(vplots[1:6], ncol=2, left="Group", bottom="intensity [0-0.0625 a.u.]; area [px^2]; perimeter, radius, majoraxis [px]; eccentricity [0-1 a.u.]"))
+
+dev.off()
+
+png(file=paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","Param_plots2.png", sep = ""), width=2480, height=3508, res=200)
+
+do.call("grid.arrange", c(vplots[7:12], ncol=2, left="Group", bottom="intensity [0-0.0625 a.u.]; area [px^2]; perimeter, radius, majoraxis [px]; eccentricity [0-1 a.u.]"))
+
+dev.off() 
+```
+
+```{r Grouped_Plots_Print, fig.width=7, fig.height=8.5}
+#Prints layout of 6 and 6 other plots that fits in 2x A4 pages in this report
+do.call("grid.arrange", c(vplots[1:6], ncol=2, left="Group", bottom="intensity [0-0.0625 a.u.]; area [px^2]; perimeter, radius, majoraxis [px]; eccentricity [0-1 a.u.]"))
+do.call("grid.arrange", c(vplots[7:12], ncol=2, left="Group", bottom="intensity [0-0.0625 a.u.]; area [px^2]; perimeter, radius, majoraxis [px]; eccentricity [0-1 a.u.]"))
+```
+
+Two layouts (*Param_plots1*, *Param_plots2*) with previous plots were saved in:  
+`r here("Exported")`  
+
+\newpage
+### Clustering and heatmap
+
+Heatmap containing all quantified parameters of objects in separate groups. Hierarchy clustering is based on euclidian method. Black numbers in heatmap boxes are means of scaled and centered values of original parameters per group.  
+
+```{r Heatmap_allP_save, include=FALSE}
+##Creates heatmap of all computed parameters
+heattable <- cbind(statTable[1], statTable[c(MeansCol)]) #crates new dataframe of means only from statTable for heatmap
+
+pheatmap(heattable[,2:13], color=hcl.colors(20, "RdYlGn"), scale="column", display_numbers=TRUE, treeheight_row=20, treeheight_col=30, main="All parameters", fontsize=10, fontsize_col=8, fontsize_row=12, angle_col=315, fontsize_number=8, border_color="white", number_color="black", number_format="%.1f", legend_breaks = c(-1, 0, 1), legend_labels = c("Low", "Medium", "High"), filename=paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","HM_allparam.png", sep = ""), width=6, height=4)
+```
+
+```{r Heatmap_allP_print, fig.width=7}
+##Prints heatmap of all computed parameters into this report
+pheatmap(heattable[,2:13], color=hcl.colors(20, "RdYlGn"), scale="column", display_numbers=TRUE, treeheight_row=20, treeheight_col=30, main="All parameters", fontsize=10, fontsize_col=8, fontsize_row=12, angle_col=315, fontsize_number=8, border_color="white", number_color="black", number_format="%.1f", legend_breaks = c(-1, 0, 1), legend_labels = c("Low", "Medium", "High"))
+```
+The heatmap *HM_allparam.png* was saved in:  
+`r here("Exported")`
+
+
+### Dimension reduction
+
+Dimension reduction methods of principal component analysis (PCA), t-SNE and UMAP were applied and maps were created only on parameters of morphology.
+
+Centered and scaled parameters used for dimension reduction:  
+Mean_area_Nucleus, Mean_perimeter_Nucleus, Mean_radius_Nucleus, Mean_majoraxis_Nucleus, Mean_eccentricity_Nucleus, Mean_area_Cell, Mean_perimeter_Cell, Mean_radius_Cell, Mean_majoraxis_Cell, Mean_eccentricity_Cell  
+
+PCA setup: Default  
+  
+t-SNE setup: Iterations 1000, perplexity 100, no PCA, eta 200, theta 0.5  
+
+UMAP setup: Number of neighbors 15, number of epochs 500
+
+```{r DimReduction_save, include=FALSE}
+#New table from FinalOtable with only morphology parameters
+DredParamTab <- as.matrix(as.data.frame(c(FinalOtable[,2:6], FinalOtable[,8:12]))) 
+
+#Centering and scaling of data
+DredParamTab <- scale(DredParamTab, center=TRUE, scale=TRUE) #center transforms mean of each column to value 0; scale transform data by dividing them by SD of each column
+  #summary(DredParamTab) #you can check that mean of transformed columns is 0 now and values are transformed by SDs
+
+##Computes PCA, using previously scaled and centered data above
+pca <- prcomp(DredParamTab, scale=FALSE, center=FALSE) 
+
+#Makes a scree plot - Plot of variations of data contained in each principal component 
+pca.var <- pca$sdev^2
+pca.var.per <- round(pca.var/sum(pca.var)*100, 1)
+  #barplot(pca.var.per, main="Scree Plot", xlab="Principal Component", ylab="Percent Variation")
+
+#Adds coordinates of PCA1 and PCA2 into objects table
+FinalOtable[14:15] <- cbind(pca$x[,1], pca$x[,2]) 
+names(FinalOtable)[14:15] <- c("PC1", "PC2")
+
+#Creates a plot of PCA
+pPCA <- ggplot(data=FinalOtable, aes(x=PC1, y=PC2, col=as.factor(Group))) +
+  geom_point(alpha=0.4, size=1, shape=16) + 
+  scale_fill_prism(palette = "colors") +
+  scale_colour_prism(palette = "colors") +
+  xlab(paste("PC1 - ", pca.var.per[1], "%", sep="")) +
+  ylab(paste("PC2 - ", pca.var.per[2], "%", sep="")) +
+  labs(color="Group") +
+  theme_prism() +
+  ggtitle("PCA")
+
+#Gets the name of top 10 parameters that contribute the most to PC1
+loading_scores <- pca$rotation[,1]
+param_scores <- abs(loading_scores) ## get the magnitudes
+param_score_ranked <- sort(param_scores, decreasing=TRUE)
+PCA.top_10_param <- names(param_score_ranked[1:10])
+PCA.top_10_param # shows names of the top 10 parameters
+pca$rotation[PCA.top_10_param,1] # shows the scores (and +/- sign)
+
+##tSNE dimensions reduction algorithm
+tsne.run <- Rtsne(DredParamTab, dims = 2, perplexity = 100, stop_lying_iter=300, mom_switch_iter=300, theta = 0.5, check_duplicates = FALSE, pca = FALSE, partial_pca = FALSE, max_iter = 1000, verbose = TRUE, normalize = FALSE, momentum = 0.7, final_momentum = 0.8, eta = 200, exaggeration_factor = 12, num_threads = 0, set.seed = 5)
+
+#Adds coordinates of tSNE1 and tSNE2 into objects table
+FinalOtable[16:17] <- cbind(tsne.run$Y[,1], tsne.run$Y[,2])
+names(FinalOtable)[16:17] <- c("tSNE1", "tSNE2")
+
+#Makes a nice looking plot that shows the tSNE1 and tSNE2
+pTSNE <- ggplot(data=FinalOtable, aes(x=tSNE1, y=tSNE2, col=as.factor(Group))) +
+  geom_point(alpha=0.4, size=1, shape=16) + 
+  scale_fill_prism(palette = "colors") +
+  scale_colour_prism(palette = "colors") +
+  xlab("tSNE1") +
+  ylab("tSNE2") +
+  labs(color="Group") +
+  theme_prism() +
+  ggtitle("t-SNE")
+
+  #niter <- seq(50,1000, by=50)
+  #plot(niter, tsne.run$itercosts, xlab="Iteration", ylab="KL divergence") #shows plot of precision after reduction (lower is better)
+
+
+###UMAP and yet another dimensions reduction algorithm
+  #umap.defaults #shows default setting of parameters for UMAP
+
+#Creates custom setting with increased number of neighbors and iterations
+custom.settings <- umap.defaults
+custom.settings$n_neighbors = 15
+custom.settings$n_epochs = 500
+  #custom.settings
+
+#Calculates UMAP with custom settings
+umap.run1 <- umap(DredParamTab, config=custom.settings, method="naive",	preserve.seed = TRUE)
+
+#Adds coordinates of UMAP1 and UMAP2 into objects table
+FinalOtable[18:19] <- cbind(umap.run1$layout[,1], umap.run1$layout[,2])
+names(FinalOtable)[18:19] <- c("UMAP1", "UMAP2")
+
+#Makes a nice looking plot that shows the UMAP1 and UMAP2
+pUMAP <- ggplot(data=FinalOtable, aes(x=UMAP1, y=UMAP2, col=as.factor(Group))) +
+  geom_point(alpha=0.4, size=1, shape=16) + 
+  scale_fill_prism(palette = "colors") +
+  scale_colour_prism(palette = "colors") +
+  xlab("UMAP1") +
+  ylab("UMAP2") +
+  labs(color="Group") +
+  theme_prism() +
+  ggtitle("UMAP")
+
+#Saves images of layout of 3 dimension reduction plots that fits in A4 page
+png(file=paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","DimReduction_plots.png", sep = ""), width=1800, height=3508, res=200)
+
+#Storage of separate plots into vplot list
+grid.arrange(pPCA, pTSNE, pUMAP, ncol=1)
+dev.off()
+```
+
+The importance of morphology parameters according PCA:  
+**`r PCA.top_10_param`**  
+Left (the most important) to right (the least important)  
+
+```{r DimReduction_print, fig.height=9.5, fig.width=5}
+#Prints layout of 3 dimension reduction plots that fit in A4 page
+grid.arrange(pPCA, pTSNE, pUMAP, ncol=1)
+```
+
+
+### Clustering and heatmap on morphology parameters 
+
+Heatmap containing only morphology parameters of objects in separate groups. Hierarchy clustering is based on euclidian method. Black numbers in heatmap boxes are means of scaled and centered values of original parameters per group.
+
+```{r Heatmap_morphoP_save, include=FALSE}
+##Creates heatmap of all computed parameters morphology parameters
+heattable2 <- heattable[,c(1,3:7,9:13)] #crates new data frame of means only from statTable for heatmap
+
+pheatmap(heattable2[,2:11], color=hcl.colors(20, "RdYlGn"), scale="column", display_numbers=TRUE, treeheight_row=20, treeheight_col=30, main="Morphology only parameters", fontsize=10, fontsize_col=8, fontsize_row=12, angle_col=315, fontsize_number=8, border_color="white", number_color="black", number_format="%.1f", legend_breaks = c(-1, 0, 1), legend_labels = c("Low", "Medium", "High"), filename=paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","HM_MorphoParam.png", sep = ""), width=6, height=4)
+```
+
+```{r Heatmap_morphoP_print, fig.width=7, fig.cap="Heatmap on morphology only parameters"}
+pheatmap(heattable2[,2:11], color=hcl.colors(20, "RdYlGn"), scale="column", display_numbers=TRUE, treeheight_row=20, treeheight_col=30, main="Morphology only parameters", fontsize=10, fontsize_col=8, fontsize_row=12, angle_col=315, fontsize_number=8, border_color="white", number_color="black", number_format="%.1f", legend_breaks = c(-1, 0, 1), legend_labels = c("Low", "Medium", "High"))
+```
+The heatmap *HM_MorphoParam.png* was saved in:  
+`r here("Exported")`  
+
+### Objects results 
+
+```{r CellTable_export}
+#Exports table of cells in CSV format with all computed (e.g. tSNE, UMAP etc.) parameters into "Exported" folder
+write.csv(as.data.frame(FinalOtable), paste(here(),"/Exported/",strftime(Sys.time(),"%Y-%m-%d_%H%M%S"),"_","TableOfCells.csv", sep=""), row.names=FALSE)
+```
+Text file *TableOfCells.csv* table of quantified parameters per object with PCA, t-SNE, UMAP coordinates was saved in:  
+`r here("Exported")`  
+This file can be used as the input for further processing eg. in FlowJo.
+
+***
+This PDF file was generated by R Markdown file, containing R script for quantification of cellular morphology created by © Radek Fedr.
